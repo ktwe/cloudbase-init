@@ -86,7 +86,7 @@ class WindowsLicensingPlugin(base.BasePlugin):
             manager = licensing.get_licensing_manager()
 
             eval_end_date = manager.is_eval()
-            if eval_end_date:
+            if eval_end_date and CONF.check_eval_license:
                 LOG.info("Evaluation license, skipping activation. "
                          "Evaluation end date: %s", eval_end_date)
             else:
