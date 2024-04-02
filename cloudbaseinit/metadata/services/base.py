@@ -14,6 +14,7 @@
 
 
 import abc
+import copy
 import gzip
 import io
 import time
@@ -109,6 +110,19 @@ class BaseMetadataService(object):
     def get_public_keys(self):
         """Get a list of space-stripped strings as public keys."""
         pass
+
+    def get_user_pwd_encryption_key(self):
+        """Get the user password encryption public key as a string.
+
+        The encryption public key, if existent, will be used to encrypt the
+        user password to be sent to the metadata service.
+        By default, the first public key set by the user
+        will be used to encrypt the user password.
+
+        """
+        public_keys = self.get_public_keys()
+        if public_keys:
+            return list(public_keys)[0]
 
     def get_network_details(self):
         """Return a list of `NetworkDetails` objects.
@@ -208,6 +222,45 @@ class BaseMetadataService(object):
     def get_ephemeral_disk_data_loss_warning(self):
         raise NotExistingMetadataException()
 
+    def get_instance_data(self):
+        """Returns a dictionary with instance data from the metadata source
+
+        The instance data structure is based on the cloud-init specifications:
+        https://cloudinit.readthedocs.io/en/latest/topics/instancedata.html
+
+        The v1 namespace contains a subset of the cloud-init standard
+        for the instance data. In the future, it should reach parity with the
+        cloud-init standard.
+
+        The ds.meta_data namespace contains all the values the v1 namespace
+        contains, in order to be compatible with cloud-init, plus a subset of
+        other instance data.
+        The ds namespace can change without prior notice and should not be
+        used in production.
+        """
+
+        instance_id = self.get_instance_id()
+        hostname = self.get_host_name()
+
+        v1_data = {
+            "instance_id": instance_id,
+            "local_hostname": hostname,
+            "public_ssh_keys": self.get_public_keys()
+        }
+
+        # Copy the v1 data to the ds.meta_data and add more fields
+        ds_meta_data = copy.deepcopy(v1_data)
+        ds_meta_data.update({
+            "hostname": hostname
+        })
+
+        return {
+            "v1": v1_data,
+            "ds": {
+                "meta_data": ds_meta_data,
+            }
+        }
+
 
 class BaseHTTPMetadataService(BaseMetadataService):
 
@@ -248,18 +301,21 @@ class BaseHTTPMetadataService(BaseMetadataService):
         else:
             return self._https_allow_insecure
 
-    def _http_request(self, url, data=None, headers=None):
+    def _http_request(self, url, data=None, headers=None, method=None):
         """Get content for received url."""
         if not url.startswith("http"):
             url = requests.compat.urljoin(self._base_url, url)
-        request_action = requests.get if not data else requests.post
-        if not data:
-            LOG.debug('Getting metadata from: %s', url)
-        else:
-            LOG.debug('Posting data to %s', url)
+        if not method:
+            if data:
+                method = "POST"
+            else:
+                method = "GET"
+        method = method.upper()
 
-        response = request_action(url=url, data=data, headers=headers,
-                                  verify=self._verify_https_request())
+        LOG.debug('Executing http request %s at %s', method, url)
+        response = requests.request(method=method, url=url, data=data,
+                                    headers=headers,
+                                    verify=self._verify_https_request())
         response.raise_for_status()
         return response.content
 
@@ -276,5 +332,37 @@ class BaseHTTPMetadataService(BaseMetadataService):
             LOG.exception(exc)
             raise exception.CertificateVerifyFailed(
                 "HTTPS certificate validation failed.")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            LOG.exception(exc)
+            raise
 
         return response
+
+
+class EmptyMetadataService(BaseMetadataService):
+
+    """Empty metadata service implementation.
+
+    The empty metadata service can be used to run plugins that do not
+    rely on metadata service information, like setting ntp, mtu, etc.
+    It can be used also as a fallback metadata service, in case no other
+    previous metadata service could be loaded.
+    """
+
+    def __init__(self):
+        super(EmptyMetadataService, self).__init__()
+
+    def _get_data(self, path):
+        pass
+
+    def load(self):
+        return True
+
+    def get_admin_username(self):
+        raise NotExistingMetadataException()
+
+    def get_admin_password(self):
+        raise NotExistingMetadataException()
+
+    def is_password_changed(self):
+        raise NotExistingMetadataException()

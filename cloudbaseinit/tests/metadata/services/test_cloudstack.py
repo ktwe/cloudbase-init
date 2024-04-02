@@ -35,6 +35,7 @@ class CloudStackTest(unittest.TestCase):
     def setUp(self):
         CONF.set_override('retry_count_interval', 0)
         CONF.set_override('retry_count', 1)
+        CONF.set_override('add_metadata_private_ip_route', True, 'cloudstack')
         self._service = self._get_service()
         self._service._metadata_uri = "http://10.1.1.1/latest/meta-data/"
 
@@ -75,14 +76,17 @@ class CloudStackTest(unittest.TestCase):
         self.assertTrue(self._service.load())
         self.assertEqual(4, mock_test_api.call_count)
 
+    @mock.patch('cloudbaseinit.utils.network.check_metadata_ip_route')
     @mock.patch('cloudbaseinit.metadata.services.cloudstack.CloudStack'
                 '._test_api')
-    def test_load_default(self, mock_test_api):
+    def test_load_default(self, mock_test_api, mock_check_metadata_ip_route):
         mock_test_api.side_effect = [True]
         self._service._test_api = mock_test_api
 
         self.assertTrue(self._service.load())
         mock_test_api.assert_called_once_with(
+            CONF.cloudstack.metadata_base_url)
+        mock_check_metadata_ip_route.assert_called_once_with(
             CONF.cloudstack.metadata_base_url)
 
     @mock.patch('cloudbaseinit.osutils.factory.get_os_utils')
@@ -194,7 +198,8 @@ class CloudStackTest(unittest.TestCase):
     @mock.patch('cloudbaseinit.metadata.services.cloudstack.CloudStack'
                 '._password_client')
     def test_get_password_fail(self, mock_password_client):
-        mock_password_client.side_effect = ["", cloudstack.BAD_REQUEST,
+        mock_password_client.side_effect = ["",
+                                            cloudstack.BAD_REQUEST,
                                             cloudstack.SAVED_PASSWORD]
         expected_output = [
             ["Try to get password from the Password Server.",
@@ -218,27 +223,66 @@ class CloudStackTest(unittest.TestCase):
 
     @mock.patch('cloudbaseinit.metadata.services.cloudstack.CloudStack'
                 '._password_client')
-    def test_delete_password(self, mock_password_client):
-        mock_password_client.side_effect = [cloudstack.BAD_REQUEST,
-                                            cloudstack.SAVED_PASSWORD]
+    def test_get_password_exception(self, mock_password_client):
+        fake_http_error = urllib.error.HTTPError(url='127.0.0.1', code=404,
+                                                 hdrs={}, fp=None,
+                                                 msg='error')
+        fake_error = OSError(10061, "Connection error")
+        mock_password_client.side_effect = [fake_http_error, fake_error]
         expected_output = [
-            'Remove the password for this instance from the '
-            'Password Server.',
-            'Fail to remove the password from the Password Server.',
+            ["Try to get password from the Password Server.",
+             "Getting password failed due to a connection failure."],
 
-            'Remove the password for this instance from the '
-            'Password Server.',
-            'The password was removed from the Password Server',
+            ["Try to get password from the Password Server.",
+             "Getting password failed: 404"],
+        ]
+
+        for _ in range(2):
+            with testutils.LogSnatcher('cloudbaseinit.metadata.services.'
+                                       'cloudstack') as snatcher:
+                self.assertIsNone(self._service._get_password())
+                self.assertEqual(expected_output.pop(), snatcher.output)
+
+        self.assertEqual(2, mock_password_client.call_count)
+
+    @mock.patch('cloudbaseinit.metadata.services.cloudstack.CloudStack'
+                '._password_client')
+    def test_delete_password(self, mock_password_client):
+        fake_url_error = urllib.error.HTTPError(url='127.0.0.1', code=404,
+                                                hdrs={}, fp=None,
+                                                msg='error')
+        fake_connection_error = OSError(10061, "Connection error")
+        mock_password_client.side_effect = [cloudstack.SAVED_PASSWORD,
+                                            cloudstack.BAD_REQUEST,
+                                            fake_url_error,
+                                            fake_connection_error]
+        expected_output = [
+
+            ['Remove the password for this instance from the '
+             'Password Server.',
+             'Removing password failed due to a connection failure.',
+             'Failed to remove the password from the Password Server.'],
+            ['Remove the password for this instance from the '
+             'Password Server.',
+             'Removing password failed: 404',
+             'Failed to remove the password from the Password Server.'],
+            ['Remove the password for this instance from the '
+             'Password Server.',
+             'Failed to remove the password from the Password Server.'],
+            ['Remove the password for this instance from the '
+             'Password Server.',
+             'The password was removed from the Password Server.'],
 
         ]
 
-        with testutils.LogSnatcher('cloudbaseinit.metadata.services.'
-                                   'cloudstack') as snatcher:
-            self.assertIsNone(self._service._delete_password())
-            self.assertIsNone(self._service._delete_password())
-            self.assertEqual(2, mock_password_client.call_count)
-        for expected, output in zip(expected_output, snatcher.output):
-            self.assertTrue(output.startswith(expected))
+        expected_output_len = len(expected_output)
+        for _ in range(expected_output_len):
+            with testutils.LogSnatcher('cloudbaseinit.metadata.services.'
+                                       'cloudstack') as snatcher:
+                self.assertIsNone(self._service._delete_password())
+                self.assertEqual(expected_output.pop(), snatcher.output)
+
+        self.assertEqual(expected_output_len, mock_password_client.call_count)
 
     @mock.patch('cloudbaseinit.metadata.services.cloudstack.CloudStack.'
                 '_delete_password')

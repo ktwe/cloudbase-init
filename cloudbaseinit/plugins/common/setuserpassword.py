@@ -12,8 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
-
 from oslo_log import log as oslo_logging
 
 from cloudbaseinit import conf as cloudbaseinit_conf
@@ -23,7 +21,6 @@ from cloudbaseinit.plugins.common import base
 from cloudbaseinit.plugins.common import constants as plugin_constant
 from cloudbaseinit.utils import crypt
 
-
 CONF = cloudbaseinit_conf.CONF
 LOG = oslo_logging.getLogger(__name__)
 
@@ -32,14 +29,7 @@ class SetUserPasswordPlugin(base.BasePlugin):
 
     def _encrypt_password(self, ssh_pub_key, password):
         cm = crypt.CryptManager()
-        with cm.load_ssh_rsa_public_key(ssh_pub_key) as rsa:
-            enc_password = rsa.public_encrypt(password.encode())
-        return base64.b64encode(enc_password)
-
-    def _get_ssh_public_key(self, service):
-        public_keys = service.get_public_keys()
-        if public_keys:
-            return list(public_keys)[0]
+        return cm.public_encrypt(ssh_pub_key, password)
 
     def _get_password(self, service, shared_data):
         injected = False
@@ -63,10 +53,10 @@ class SetUserPasswordPlugin(base.BasePlugin):
                       'and it cannot be updated in the instance metadata')
             return True
         else:
-            ssh_pub_key = self._get_ssh_public_key(service)
-            if ssh_pub_key:
-                enc_password_b64 = self._encrypt_password(ssh_pub_key,
-                                                          password)
+            user_pwd_encryption_key = service.get_user_pwd_encryption_key()
+            if user_pwd_encryption_key:
+                enc_password_b64 = self._encrypt_password(
+                    user_pwd_encryption_key, password)
                 return service.post_password(enc_password_b64)
             else:
                 LOG.info('No SSH public key available for password encryption')

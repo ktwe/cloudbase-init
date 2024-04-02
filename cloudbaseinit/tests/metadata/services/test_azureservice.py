@@ -66,7 +66,7 @@ class AzureServiceTest(unittest.TestCase):
                                                dhcp_option=None):
         mock_dhcp.return_value = dhcp_option
         if not dhcp_option:
-            self.assertRaises(exception.MetadaNotFoundException,
+            self.assertRaises(exception.MetadataNotFoundException,
                               (self._azureservice.
                                _get_wire_server_endpoint_address))
         else:
@@ -409,7 +409,7 @@ class AzureServiceTest(unittest.TestCase):
         mock_get_versions.return_value = mock_version
         mock_version.Versions.Supported.Version = [version]
         if self._azureservice_module.WIRE_SERVER_VERSION is not version:
-            self.assertRaises(exception.MetadaNotFoundException,
+            self.assertRaises(exception.MetadataNotFoundException,
                               self._azureservice._check_version_header)
         else:
             self._azureservice._check_version_header()
@@ -594,16 +594,19 @@ class AzureServiceTest(unittest.TestCase):
                    endpoint_side_effect=None, load_side_effect=None):
         if endpoint_side_effect:
             mock_get_endpoint_address.side_effect = endpoint_side_effect
-            expected_logging = ["Azure WireServer endpoint not found"]
+            mock_endpoint = "168.63.129.16"
+            expected_logging = [
+                "Azure WireServer endpoint not found. "
+                "Using default endpoint 168.63.129.16."]
             with self._logsnatcher:
                 res = self._azureservice.load()
-                self.assertFalse(res)
+                self.assertTrue(res)
             self.assertEqual(self._logsnatcher.output, expected_logging)
             mock_get_endpoint_address.assert_called_once_with()
-            return
+        else:
+            mock_endpoint = mock.sentinel.endpoint
+            mock_get_endpoint_address.return_value = mock_endpoint
 
-        mock_endpoint = mock.sentinel.endpoint
-        mock_get_endpoint_address.return_value = mock_endpoint
         if load_side_effect:
             mock_check_version_header.side_effect = load_side_effect
             res = self._azureservice.load()
@@ -613,9 +616,8 @@ class AzureServiceTest(unittest.TestCase):
             res = self._azureservice.load()
             self.assertTrue(res)
             self.assertIn(str(mock_endpoint), self._azureservice._base_url)
-            mock_check_version_header.assert_called_once_with()
-            mock_get_ovf_env.assert_called_once_with()
-            return
+            mock_check_version_header.assert_called_with()
+            mock_get_ovf_env.assert_called_with()
 
     def test_load_no_endpoint(self):
         self._test_load(endpoint_side_effect=Exception)

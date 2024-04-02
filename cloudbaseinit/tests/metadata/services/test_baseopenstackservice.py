@@ -126,6 +126,27 @@ class TestBaseOpenStackService(unittest.TestCase):
 
     @mock.patch(MODPATH +
                 ".BaseOpenStackService._get_meta_data")
+    def _test_get_admin_username(self, mock_get_meta_data, meta_data):
+        mock_get_meta_data.return_value = meta_data
+        response = self._service.get_admin_username()
+        mock_get_meta_data.assert_called_once_with()
+        if meta_data and 'admin_username' in meta_data.get('meta'):
+            self.assertEqual(meta_data.get('meta')['admin_username'], response)
+        else:
+            self.assertIsNone(response)
+
+    def test_get_admin_username_in_meta(self):
+        self._test_get_admin_username(
+            meta_data={'meta': {'admin_username': 'fake user'}})
+
+    def test_get_admin_username_no_username_in_meta(self):
+        self._test_get_admin_username(meta_data={'meta': {}})
+
+    def test_get_admin_username_no_meta_data(self):
+        self._test_get_admin_username(meta_data={})
+
+    @mock.patch(MODPATH +
+                ".BaseOpenStackService._get_meta_data")
     def _test_get_admin_password(self, mock_get_meta_data, meta_data):
         mock_get_meta_data.return_value = meta_data
         response = self._service.get_admin_password()
@@ -245,7 +266,19 @@ class TestBaseOpenStackService(unittest.TestCase):
             fake_json_response.GATEWAY61,
             None
         )
-        self.assertEqual([nic0, nic1], ret)
+        nic2 = network_model.NetworkDetails(
+            fake_json_response.NAME2,
+            None,
+            fake_json_response.ADDRESS2,
+            fake_json_response.ADDRESS62,
+            fake_json_response.NETMASK2,
+            fake_json_response.NETMASK62,
+            fake_json_response.BROADCAST2,
+            fake_json_response.GATEWAY2,
+            fake_json_response.GATEWAY62,
+            None
+        )
+        self.assertEqual([nic0, nic1, nic2], ret)
 
     def test_get_network_details_no_config(self):
         self._partial_test_get_network_details(

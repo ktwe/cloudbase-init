@@ -36,9 +36,11 @@ import win32security
 import win32service
 import winerror
 
+from cloudbaseinit import constant
 from cloudbaseinit import exception
 from cloudbaseinit.osutils import base
 from cloudbaseinit.utils import classloader
+from cloudbaseinit.utils import retry_decorator
 from cloudbaseinit.utils.windows import disk
 from cloudbaseinit.utils.windows import network
 from cloudbaseinit.utils.windows import privilege
@@ -472,6 +474,35 @@ class WindowsUtils(base.BaseOSUtils):
                 raise exception.CloudbaseInitException(
                     "Renaming user failed: %s" % ex.args[2])
 
+    def set_user_info(self, username, full_name=None,
+                      disabled=False, expire_interval=None):
+
+        user_info = self._get_user_info(username, 2)
+
+        if full_name:
+            user_info["full_name"] = full_name
+
+        if disabled:
+            user_info["flags"] |= win32netcon.UF_ACCOUNTDISABLE
+        else:
+            user_info["flags"] &= ~win32netcon.UF_ACCOUNTDISABLE
+
+        if expire_interval is not None:
+            user_info["acct_expires"] = int(expire_interval)
+        else:
+            user_info["acct_expires"] = win32netcon.TIMEQ_FOREVER
+
+        try:
+            win32net.NetUserSetInfo(None, username, 2, user_info)
+        except win32net.error as ex:
+            if ex.args[0] == self.NERR_UserNotFound:
+                raise exception.ItemNotFoundException(
+                    "User not found: %s" % username)
+            else:
+                LOG.debug(ex)
+                raise exception.CloudbaseInitException(
+                    "Setting user info failed: %s" % ex.args[2])
+
     def enum_users(self):
         usernames = []
         resume_handle = 0
@@ -529,6 +560,34 @@ class WindowsUtils(base.BaseOSUtils):
             raise exception.CloudbaseInitException(
                 "Setting password expiration failed: %s" % ex.args[2])
 
+    def group_exists(self, group):
+        try:
+            self._get_group_info(group, 1)
+            return True
+        except exception.ItemNotFoundException:
+            # Group not found
+            return False
+
+    def _get_group_info(self, group, level):
+        try:
+            return win32net.NetLocalGroupGetInfo(None, group, level)
+        except win32net.error as ex:
+            if ex.args[0] == self.NERR_GroupNotFound:
+                raise exception.ItemNotFoundException(
+                    "Group not found: %s" % group)
+            else:
+                raise exception.CloudbaseInitException(
+                    "Failed to get group info: %s" % ex.args[2])
+
+    def create_group(self, group, description=None):
+        group_info = {"name": group}
+
+        try:
+            win32net.NetLocalGroupAdd(None, 0, group_info)
+        except win32net.error as ex:
+            raise exception.CloudbaseInitException(
+                "Create group failed: %s" % ex.args[2])
+
     @staticmethod
     def _get_cch_referenced_domain_name(domain_name):
         return wintypes.DWORD(
@@ -560,11 +619,13 @@ class WindowsUtils(base.BaseOSUtils):
                                                    3, ctypes.pointer(lmi), 1)
 
         if ret_val == self.NERR_GroupNotFound:
-            raise exception.CloudbaseInitException('Group not found')
+            raise exception.CloudbaseInitException("Group '%s' not found"
+                                                   % groupname)
         elif ret_val == self.ERROR_ACCESS_DENIED:
             raise exception.CloudbaseInitException('Access denied')
         elif ret_val == self.ERROR_NO_SUCH_MEMBER:
-            raise exception.CloudbaseInitException('Username not found')
+            raise exception.CloudbaseInitException("Username '%s' not found"
+                                                   % username)
         elif ret_val == self.ERROR_MEMBER_IN_ALIAS:
             # The user is already a member of the group
             pass
@@ -581,6 +642,9 @@ class WindowsUtils(base.BaseOSUtils):
             # User not found
             pass
 
+    @retry_decorator.retry_decorator(
+        max_retry_count=3,
+        exceptions=exception.LoadUserProfileCloudbaseInitException)
     def create_user_logon_session(self, username, password, domain='.',
                                   load_profile=True,
                                   logon_type=LOGON32_LOGON_INTERACTIVE):
@@ -605,7 +669,7 @@ class WindowsUtils(base.BaseOSUtils):
             ret_val = userenv.LoadUserProfileW(token, ctypes.byref(pi))
             if not ret_val:
                 kernel32.CloseHandle(token)
-                raise exception.WindowsCloudbaseInitException(
+                raise exception.LoadUserProfileCloudbaseInitException(
                     "Cannot load user profile: %r")
 
         return token
@@ -757,6 +821,8 @@ class WindowsUtils(base.BaseOSUtils):
 
         return iface_index_list[0]["friendly_name"]
 
+    @retry_decorator.retry_decorator(
+        max_retry_count=3, exceptions=exception.ItemNotFoundException)
     def set_network_adapter_mtu(self, name, mtu):
         if not self.check_os_version(6, 0):
             raise exception.CloudbaseInitException(
@@ -849,19 +915,21 @@ class WindowsUtils(base.BaseOSUtils):
         return reboot_required
 
     @staticmethod
-    def _fix_network_adapter_dhcp(interface_name, enable_dhcp, address_family):
-        interface_id = WindowsUtils._get_network_adapter(interface_name).GUID
-        tcpip_key = "Tcpip6" if address_family == AF_INET6 else "Tcpip"
+    def _fix_network_adapter_dhcp(interface_name,
+                                  enable_dhcp,
+                                  address_family):
+        enable_dhcp_value = 1 if enable_dhcp else 0
 
-        with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                "SYSTEM\\CurrentControlSet\\services\\%(tcpip_key)s\\"
-                "Parameters\\Interfaces\\%(interface_id)s" %
-                {"tcpip_key": tcpip_key, "interface_id": interface_id},
-                0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(
-                key, 'EnableDHCP', 0, winreg.REG_DWORD,
-                1 if enable_dhcp else 0)
+        conn = wmi.WMI(moniker='//./root/standardcimv2')
+        net_interface = conn.MSFT_NetIPInterface(
+            InterfaceAlias=interface_name, AddressFamily=address_family)
+        if not len(net_interface):
+            raise exception.ItemNotFoundException(
+                'Network interface with name "%s" not found' %
+                interface_name)
+        net_interface = net_interface[0]
+        net_interface.Dhcp = enable_dhcp_value
+        net_interface.put()
 
     @staticmethod
     def _set_interface_dns(interface_name, dnsnameservers):
@@ -1739,3 +1807,6 @@ class WindowsUtils(base.BaseOSUtils):
         ls = info['FileVersionLS']
         return (win32api.HIWORD(ms), win32api.LOWORD(ms),
                 win32api.HIWORD(ls), win32api.LOWORD(ls))
+
+    def get_default_script_exec_header(self):
+        return constant.SCRIPT_HEADER_CMD

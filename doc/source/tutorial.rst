@@ -1,5 +1,3 @@
-.. _tutorial:
-
 Tutorial
 ========
 
@@ -57,7 +55,7 @@ services and plugins ready for execution and also customizing user experience.
     # Which devices to inspect for a possible configuration drive (metadata).
     config_drive_raw_hhd=true
     config_drive_cdrom=true
-    # Path to tar implementation from Ubuntu.
+    # Path to tar implementation from FreeBSD: https://www.freebsd.org/cgi/man.cgi?tar(1).
     bsdtar_path=C:\Program Files (x86)\Cloudbase Solutions\Cloudbase-Init\bin\bsdtar.exe
     # Logging debugging level.
     verbose=true
@@ -93,6 +91,7 @@ initialization cases.
 More of these explained options are available under the :ref:`services`,
 :ref:`plugins` and :ref:`userdata` documentation.
 
+A complete list of config options can be found at :ref:`config_list`.
 
 .. _execution:
 
@@ -102,12 +101,12 @@ File execution
 Cloudbase-init has the ability to execute user provided scripts, usually
 found in the default path
 *C:\\Program Files (x86)\\Cloudbase Solutions\\Cloudbase-Init\\LocalScripts*,
-through a specific :ref:`plugin <scripts>` for doing this stuff. Depending on
-the platform used, the files should be valid MZPEs, PowerShell, Python,
-Batch or Bash scripts, containing the actual code. The user data plugin is
-also capable of executing various script types and return code value handling.
+through a specific :ref:`plugin <scripts>` for doing it. Depending on
+the platform used, the files should be valid PowerShell, Python, Batch or Bash scripts.
+The userdata can be also a PEM certificate, in a cloud-config format or a MIME content.
+The user data plugin is capable of executing various script types and exit code value handling.
 
-Based on their return codes, you can instruct the system to reboot or even
+Based on their exit codes, you can instruct the system to reboot or even
 re-execute the plugin on the next boot:
 
 * 1001 - reboot and don't run the plugin again on next boot

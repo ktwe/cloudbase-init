@@ -34,9 +34,16 @@ class ServiceException(Exception):
     pass
 
 
-class MetadaNotFoundException(CloudbaseInitException):
+class MetadataNotFoundException(CloudbaseInitException):
 
     """Exception thrown in case no metadata service is found."""
+
+    pass
+
+
+class MetadataEndpointException(CloudbaseInitException):
+
+    """Exception thrown in case the metadata is unresponsive or errors out."""
 
     pass
 
@@ -64,3 +71,14 @@ class WindowsCloudbaseInitException(CloudbaseInitException):
         except TypeError:
             formatted_msg = msg
         super(WindowsCloudbaseInitException, self).__init__(formatted_msg)
+
+
+class LoadUserProfileCloudbaseInitException(WindowsCloudbaseInitException):
+    """Windows cannot load the newly created user profile.
+
+    The load user profile can fail if the Windows subsystems responsible for
+    the action are not ready. This usually happens on laggy systems and should
+    be retried.
+    """
+
+    pass

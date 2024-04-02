@@ -63,20 +63,24 @@ def _process_content(content, encoding):
         # At this point, content will be string, which is wrong for Python 3.
         result = result.encode()
 
-    steps = _decode_steps(encoding)
-    if not steps:
-        LOG.error("Unknown encoding, doing nothing.")
+    if not encoding:
+        # No action is required for this scenario
         return result
 
-    for mime_type in _decode_steps(encoding):
-        if mime_type == GZIP_MIME:
+    steps = _decode_steps(encoding)
+    if not steps:
+        LOG.warning("Unknown encoding, assuming plain text.")
+        return result
+
+    for step in steps:
+        if step == GZIP_MIME:
             bufferio = io.BytesIO(result)
             with gzip.GzipFile(fileobj=bufferio, mode='rb') as file_handle:
                 try:
                     result = file_handle.read()
                 except (IOError, ValueError):
                     LOG.exception("Fail to decompress gzip content.")
-        elif mime_type == BASE64_MIME:
+        elif step == BASE64_MIME:
             try:
                 result = base64.b64decode(result)
             except (ValueError, TypeError):
@@ -128,6 +132,7 @@ class WriteFilesPlugin(base.BaseCloudConfigPlugin):
         permissions: The octal permissions set that should be given for
         this file.
         encoding: An optional encoding specification for the file.
+        append: An optional flag to append the content
 
     The only required keys in this dictionary are `path` and `content`.
     """
@@ -142,7 +147,12 @@ class WriteFilesPlugin(base.BaseCloudConfigPlugin):
         content = _process_content(item['content'],
                                    item.get('encoding'))
         permissions = _convert_permissions(item.get('permissions'))
-        _write_file(path, content, permissions)
+
+        open_mode = "wb"
+        if item.get('append', False):
+            open_mode = "ab"
+
+        _write_file(path, content, permissions, open_mode)
 
     def process(self, data):
         """Process the given data received from the cloud-config userdata.

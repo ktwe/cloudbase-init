@@ -41,16 +41,21 @@ class NetLBFOTest(unittest.TestCase):
     def tearDown(self):
         self._module_patcher.stop()
 
+    @mock.patch('time.sleep')
     @mock.patch(MODPATH + '.NetLBFOTeamManager._get_primary_adapter_name')
+    @mock.patch(MODPATH + '.NetLBFOTeamManager._create_team')
     @mock.patch(MODPATH + '.NetLBFOTeamManager._add_team_member')
     @mock.patch(MODPATH + '.NetLBFOTeamManager._set_primary_nic_vlan_id')
     @mock.patch(MODPATH + '.NetLBFOTeamManager._wait_for_nic')
     @mock.patch(MODPATH + '.NetLBFOTeamManager.delete_team')
     def _test_create_team(self, mock_delete_team, mock_wait_for_nic,
                           mock_set_primary_nic_vlan_id, mock_add_team_member,
-                          mock_get_primary_adapter_name, mode_not_found=False,
-                          lb_algo_not_found=False, add_team_member_fail=False):
-        mock_get_primary_adapter_name.return_value = mock.sentinel.pri_nic_name
+                          mock_create_team, mock_primary_adapter_name,
+                          mock_time_sleep, mode_not_found=False,
+                          lb_algo_not_found=False,
+                          add_team_member_fail=False):
+        mock_primary_adapter_name.return_value = mock.sentinel.pri_nic_name
+        mock_create_team.return_value = None
 
         lacp_timer = network_model.BOND_LACP_RATE_FAST
         members = [mock.sentinel.pri_nic_name, mock.sentinel.other_member]
@@ -58,6 +63,9 @@ class NetLBFOTest(unittest.TestCase):
         conn = self._wmi_mock.WMI.return_value
         mock_team = mock.Mock()
         conn.MSFT_NetLbfoTeam.new.return_value = mock_team
+        mock_team_nic = mock.Mock()
+        mock_team_nic.Name = mock.Mock()
+        conn.MSFT_NetLbfoTeamNic.return_value = [mock_team_nic]
 
         if mode_not_found:
             mode = "fake mode"
@@ -94,35 +102,22 @@ class NetLBFOTest(unittest.TestCase):
                 mock.sentinel.mac, mock.sentinel.pri_nic_name,
                 mock.sentinel.vlan_id, lacp_timer)
 
-        custom_options = [
-            {
-                u'name': u'TeamMembers',
-                u'value_type':
-                    self._mi_mock.MI_ARRAY | self._mi_mock.MI_STRING,
-                u'value': [mock.sentinel.pri_nic_name]
-            },
-            {
-                u'name': u'TeamNicName',
-                u'value_type': self._mi_mock.MI_STRING,
-                u'value': mock.sentinel.pri_nic_name
-            }
-        ]
-
-        operation_options = {u'custom_options': custom_options}
-        mock_team.put.assert_called_once_with(
-            operation_options=operation_options)
-
-        mock_add_team_member.assert_called_once_with(
-            conn, mock.sentinel.team_name, mock.sentinel.other_member)
-
         if not add_team_member_fail:
             mock_set_primary_nic_vlan_id.assert_called_once_with(
                 conn, mock.sentinel.team_name, mock.sentinel.vlan_id)
-
+            mock_create_team.assert_called_once_with(
+                conn, mock.sentinel.team_name, mock.sentinel.pri_nic_name,
+                2, 3, mock.sentinel.pri_nic_name, 1)
             mock_wait_for_nic.assert_called_once_with(
-                mock.sentinel.pri_nic_name)
+                mock_team_nic.Name)
+            mock_add_team_member.assert_called_once_with(
+                conn, mock.sentinel.team_name, mock.sentinel.other_member)
         else:
-            mock_delete_team.assert_called_once_with(mock.sentinel.team_name)
+            mock_add_team_member.assert_called_with(
+                conn, mock.sentinel.team_name, mock.sentinel.other_member)
+            mock_delete_team.assert_called_with(mock.sentinel.team_name)
+            self.assertEqual(mock_add_team_member.call_count, 6)
+            self.assertEqual(mock_delete_team.call_count, 6)
 
     def test_create_team(self):
         self._test_create_team()
@@ -146,6 +141,41 @@ class NetLBFOTest(unittest.TestCase):
         conn.MSFT_NetLbfoTeam.assert_called_once_with(
             name=mock.sentinel.team_name)
         mock_team.Delete_.assert_called_once_with()
+
+    def test_create_team_private(self):
+        conn = self._wmi_mock.WMI.return_value
+        mock_team = mock.Mock()
+        conn.MSFT_NetLbfoTeam.new.return_value = mock_team
+        teaming_mode = 1
+        lb_algo = 2
+        lacp_timer = 1
+
+        custom_options = [
+            {
+                u'name': u'TeamMembers',
+                u'value_type':
+                    self._mi_mock.MI_ARRAY | self._mi_mock.MI_STRING,
+                u'value': [mock.sentinel.private_nic_team]
+            },
+            {
+                u'name': u'TeamNicName',
+                u'value_type': self._mi_mock.MI_STRING,
+                u'value': mock.sentinel.team_nic_name
+            }
+        ]
+
+        operation_options = {u'custom_options': custom_options}
+        self._netlbfo.NetLBFOTeamManager()._create_team(
+            conn, mock.sentinel.team_name, mock.sentinel.team_nic_name,
+            teaming_mode, lb_algo, mock.sentinel.private_nic_team,
+            lacp_timer)
+
+        self.assertEqual(mock.sentinel.team_name, mock_team.Name)
+        self.assertEqual(teaming_mode, mock_team.TeamingMode)
+        self.assertEqual(lb_algo, mock_team.LoadBalancingAlgorithm)
+        self.assertEqual(lacp_timer, mock_team.LacpTimer)
+        mock_team.put.assert_called_once_with(
+            operation_options=operation_options)
 
     @mock.patch(MODPATH + '.NetLBFOTeamManager._wait_for_nic')
     def test_add_team_nic(self, mock_wait_for_nic):

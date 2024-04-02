@@ -23,6 +23,7 @@ from cloudbaseinit import conf as cloudbaseinit_conf
 from cloudbaseinit.metadata.services import base
 from cloudbaseinit.osutils import factory as osutils_factory
 from cloudbaseinit.utils import encoding
+from cloudbaseinit.utils import network
 
 CONF = cloudbaseinit_conf.CONF
 LOG = oslo_logging.getLogger(__name__)
@@ -83,6 +84,10 @@ class CloudStack(base.BaseHTTPMetadataService):
     def load(self):
         """Obtain all the required information."""
         super(CloudStack, self).load()
+
+        if CONF.cloudstack.add_metadata_private_ip_route:
+            network.check_metadata_ip_route(CONF.cloudstack.metadata_base_url)
+
         if self._test_api(CONF.cloudstack.metadata_base_url):
             return True
 
@@ -168,9 +173,16 @@ class CloudStack(base.BaseHTTPMetadataService):
         for _ in range(CONF.retry_count):
             try:
                 content = self._password_client(headers=headers).strip()
-            except http_client.HTTPConnection as exc:
-                LOG.error("Getting password failed: %s", exc)
+            except urllib.error.HTTPError as exc:
+                LOG.debug("Getting password failed: %s", exc.code)
                 continue
+            except OSError as exc:
+                if exc.errno == 10061:
+                    # Connection error
+                    LOG.debug("Getting password failed due to a "
+                              "connection failure.")
+                    continue
+                raise
 
             if not content:
                 LOG.warning("The Password Server did not have any "
@@ -207,16 +219,23 @@ class CloudStack(base.BaseHTTPMetadataService):
         for _ in range(CONF.retry_count):
             try:
                 content = self._password_client(headers=headers).strip()
-            except http_client.HTTPConnection as exc:
-                LOG.error("Removing password failed: %s", exc)
+            except urllib.error.HTTPError as exc:
+                LOG.debug("Removing password failed: %s", exc.code)
                 continue
+            except OSError as exc:
+                if exc.errno == 10061:
+                    # Connection error
+                    LOG.debug("Removing password failed due to a "
+                              "connection failure.")
+                    continue
+                raise
 
             if content != BAD_REQUEST:
                 LOG.info("The password was removed from the Password Server.")
                 break
         else:
-            LOG.warning("Fail to remove the password from the "
-                        "Password Server.")
+            LOG.error("Failed to remove the password from the "
+                      "Password Server.")
 
     def get_admin_password(self):
         """Get the admin password from the Password Server.
