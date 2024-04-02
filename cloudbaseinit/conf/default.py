@@ -75,9 +75,6 @@ class GlobalOptions(conf_base.Options):
             cfg.BoolOpt(
                 'set_avma_product_key', default=False,
                 help='Sets the AVMA product key for this operating system'),
-            cfg.BoolOpt(
-                'check_eval_license', default=True,
-                help='Skip product key activation for evaluation images'),
             cfg.StrOpt(
                 'kms_host', default=None,
                 help='The KMS host address in form <host>[:<port>], '
